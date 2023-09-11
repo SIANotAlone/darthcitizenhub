@@ -24,6 +24,10 @@ type Games_News struct {
 	Time    float64 `json:"time"`
 	Favorit bool    `json:"favorit"`
 }
+type Origin struct {
+	Origin string `json:"origin"`
+}
+
 type Favorit struct {
 	Id      int  `json:"id"`
 	Checked bool `json:"checked"`
@@ -58,12 +62,142 @@ func main() {
 	origins := handlers.AllowedOrigins([]string{"*"})
 	r.HandleFunc("/news/games", gaming_news_page)
 	r.HandleFunc("/news/games/{id}", gaming_news_page_number)
+	r.HandleFunc("/news/games/by_origin/{origin}", get_gaming_news_by_origin)
+	r.HandleFunc("/news/games/by_origin/{origin}/{id}", get_gaming_news_byorigin_page_number)
+	r.HandleFunc("/news/games/origins/", get_games_origins)
+	r.HandleFunc("/news/games/favorite/", get_favorite_games)
 	r.HandleFunc("/news/games/cancel_favorite/", cancel_favorit).Methods(http.MethodPost)
 	r.HandleFunc("/news/games/changefavorite/", change_games_favorite).Methods(http.MethodPost)
+	r.HandleFunc("/news/games/deleteallfavorite/", delete_all_favorite).Methods(http.MethodPost)
 	r.HandleFunc("/news/serials", serials_news_page)
 	r.HandleFunc("/news/films", films_news_page)
 	corsHandler := handlers.CORS(headers, methods, origins)(r)
 	http.ListenAndServe(":80", corsHandler)
+}
+
+func get_gaming_news_byorigin_page_number(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	str_id := vars["id"]
+	origin := vars["origin"]
+	id, err := strconv.Atoi(str_id)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var gaming_news []Games_News
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	offset := (id * 20) - 20
+	var query string = "SELECT * FROM allnews.games_news WHERE origin = '" + origin + "' ORDER BY id DESC LIMIT 20  OFFSET " + strconv.FormatInt(int64(offset), 10)
+	rows, err := db.Query(query)
+	for rows.Next() {
+		f := Games_News{}
+		err = rows.Scan(&f.Id, &f.Title, &f.Short, &f.Origin, &f.Url, &f.Preview, &f.Time, &f.Favorit)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		gaming_news = append(gaming_news, f)
+
+	}
+	db.Close()
+	json.NewEncoder(w).Encode(gaming_news)
+	logger.Info("Games news by origin " + origin + " and page " + str_id)
+
+}
+
+func delete_all_favorite(w http.ResponseWriter, r *http.Request) {
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	req := `UPDATE allnews.games_news SET favorit = false WHERE favorit = true;`
+	_, err = db.Exec(req)
+	if err != nil {
+		panic(err)
+	}
+	db.Close()
+	var resp Favorit_response
+	resp.Status = "200 OK"
+	resp.Message = "Успішно видалено із закладок"
+	json.NewEncoder(w).Encode(resp)
+	logger.Info("Delete all favorite news")
+
+}
+
+func get_favorite_games(w http.ResponseWriter, r *http.Request) {
+	var gaming_news []Games_News
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+	query := "SELECT * FROM allnews.games_news WHERE favorit = True ORDER BY id DESC"
+	// fmt.Println(query)
+	rows, err := db.Query(query)
+	for rows.Next() {
+		f := Games_News{}
+		err = rows.Scan(&f.Id, &f.Title, &f.Short, &f.Origin, &f.Url, &f.Preview, &f.Time, &f.Favorit)
+		if err != nil {
+			log.Fatal(err)
+		}
+		gaming_news = append(gaming_news, f)
+
+	}
+	db.Close()
+	json.NewEncoder(w).Encode(gaming_news)
+	logger.Info("Get favorite gaming news")
+
+}
+
+func get_gaming_news_by_origin(w http.ResponseWriter, r *http.Request) {
+
+	vars := mux.Vars(r)
+	origin := vars["origin"]
+
+	var gaming_news []Games_News
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+	query := "SELECT * FROM allnews.games_news WHERE origin = '" + origin + "' ORDER BY id DESC LIMIT 20"
+	// fmt.Println(query)
+	rows, err := db.Query(query)
+	for rows.Next() {
+		f := Games_News{}
+		err = rows.Scan(&f.Id, &f.Title, &f.Short, &f.Origin, &f.Url, &f.Preview, &f.Time, &f.Favorit)
+		if err != nil {
+			log.Fatal(err)
+		}
+		gaming_news = append(gaming_news, f)
+
+	}
+	db.Close()
+	json.NewEncoder(w).Encode(gaming_news)
+	logger.Info("Get last news by origin page 1")
+}
+
+func get_games_origins(w http.ResponseWriter, r *http.Request) {
+	var origins []Origin
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+	rows, err := db.Query("SELECT DISTINCT origin FROM allnews.games_news")
+	for rows.Next() {
+		f := Origin{}
+		err = rows.Scan(&f.Origin)
+		if err != nil {
+			log.Fatal(err)
+		}
+		origins = append(origins, f)
+
+	}
+	db.Close()
+	json.NewEncoder(w).Encode(origins)
+	logger.Info("Get all origins")
 }
 
 func cancel_favorit(w http.ResponseWriter, r *http.Request) {
