@@ -87,6 +87,7 @@ func main() {
 	http.ListenAndServe(":80", corsHandler)
 }
 
+<<<<<<< HEAD
 func new_episode(w http.ResponseWriter, r *http.Request) {
 
 	var episode Episode
@@ -112,6 +113,8 @@ func new_episode(w http.ResponseWriter, r *http.Request) {
 
 }
 
+=======
+>>>>>>> a06771b6f349b9e23a8d5f02e19b21e7ac77ea7c
 func get_gaming_news_byorigin_page_number(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	str_id := vars["id"]
