@@ -82,6 +82,69 @@ type Notation struct {
 type Notation_del struct {
 	ID int `json:"id"`
 }
+type Episode_notation_responce struct {
+	Episode  Episode_db         `json:"episode"`
+	Notation []Episode_notation `json:"notation"`
+}
+type Statistics_main struct {
+	Games_news            int64 `json:"games_news"`
+	Last_30day            int64 `json:"last_30day"`
+	This_month_from_first int64 `json:"this_month_from_first"`
+	Last_month            int64 `json:"last_month"`
+	Origins               int64 `json:"origins"`
+	Episodes              int64 `json:"episodes"`
+	Episodes_released     int64 `json:"episodes_released"`
+	Notations             int64 `json:"notations"`
+	Deleted_notations     int64 `json:"deleted_notations"`
+}
+type Statistics_by_month_db struct {
+	Month_name                    string `json:"month_name"`
+	Year                          int    `json:"year"`
+	Start_of_month_unix_timestamp int64  `json:"start_of_month_unix_timestamp"`
+	End_of_month_unix_timestamp   int64  `json:"end_of_month_unix_timestamp"`
+	Count_news                    int64  `json:"count_news"`
+}
+type Statistics struct {
+	Main      Statistics_main          `json:"main"`
+	By_month  []Statistics_by_month_db `json:"by_month"`
+	By_origin Statistics_by_origin     `json:"by_origin"`
+}
+type Statistics_by_origin struct {
+	Origins []string `json:"origins"`
+	Count   []int64  `json:"count"`
+}
+
+type Scenario_create struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+}
+
+type Scenario_delete struct {
+	ID int `json:"id"`
+}
+type Scenarios struct {
+	ID            int       `json:"id"`
+	Number        int       `json:"number"`
+	Title         string    `json:"title"`
+	Date          time.Time `json:"date"`
+	Date_released time.Time `json:"date_released"`
+	Released      bool      `json:"released"`
+}
+type Scenario struct {
+	ID            int       `json:"id"`
+	Number        int       `json:"number"`
+	Title         string    `json:"title"`
+	Body          string    `json:"body"`
+	Date          time.Time `json:"date"`
+	Date_released time.Time `json:"date_released"`
+	Released      bool      `json:"released"`
+}
+type Scenario_update struct {
+	ID     int    `json:"id"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+}
 
 func init() {
 	// Log as JSON instead of the default ASCII formatter.
@@ -120,11 +183,227 @@ func main() {
 	r.HandleFunc("/episode/get/{id}", get_episode_by_id)
 	r.HandleFunc("/episode/notation/update/", update_notation).Methods(http.MethodPost)
 	r.HandleFunc("/episode/notation/delete/", delete_notation).Methods(http.MethodPost)
+
+	r.HandleFunc("/statistics", get_statistics)
+
+	r.HandleFunc("/scenario/add", add_scenario).Methods(http.MethodPost)
+	r.HandleFunc("/scenario/delete", delete_scenario).Methods(http.MethodPost)
+	r.HandleFunc("/scenario/get_all", get_scenarios)
+	r.HandleFunc("/scenario/{id}", get_scenarios_by_id)
+	r.HandleFunc("/scenario/update/", update_scenario).Methods(http.MethodPost)
+
 	corsHandler := handlers.CORS(headers, methods, origins)(r)
 
 	http.ListenAndServe(":80", corsHandler)
 }
 
+func update_scenario(w http.ResponseWriter, r *http.Request) {
+	var s Scenario_update
+	err := json.NewDecoder(r.Body).Decode(&s)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := `UPDATE allnews.scenario SET number = $1, title = $2, body = $3 WHERE id = $4;`
+	_, err = db.Exec(req, s.Number, s.Title, s.Body, s.ID)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db.Close()
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = fmt.Sprintf("Успішно оновлено сценарій із ID %d", s.ID)
+	json.NewEncoder(w).Encode(resp)
+	logger.Info(fmt.Sprintf("Update notation with ID %d", s.ID))
+}
+func get_scenarios_by_id(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	str_id := vars["id"]
+	id, err := strconv.Atoi(str_id)
+
+	if err != nil {
+		panic(err)
+	}
+	s := Scenario{}
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := `select id, number, title, body, date , date_released, released from allnews.scenario where id =$1;`
+
+	rows, err := db.Query(req, id)
+	for rows.Next() {
+		err = rows.Scan(&s.ID, &s.Number, &s.Title, &s.Body, &s.Date, &s.Date_released, &s.Released)
+		if err != nil {
+			logger.Warn(err)
+		}
+	}
+	db.Close()
+	logger.Info(fmt.Sprintf("Get scenario with ID %d", id))
+	json.NewEncoder(w).Encode(s)
+
+}
+func get_scenarios(w http.ResponseWriter, r *http.Request) {
+	var s []Scenarios
+
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	rows, err := db.Query("select id, number, title, date , date_released, released from allnews.scenario ORDER BY id DESC")
+	if err != nil {
+		logger.Warn(err)
+	}
+	for rows.Next() {
+		var scenario Scenarios
+		err = rows.Scan(&scenario.ID, &scenario.Number, &scenario.Title, &scenario.Date, &scenario.Date_released, &scenario.Released)
+		if err != nil {
+			logger.Warn(err)
+		}
+		s = append(s, scenario)
+	}
+	db.Close()
+	logger.Info("Get all scenarios")
+	json.NewEncoder(w).Encode(s)
+}
+
+func delete_scenario(w http.ResponseWriter, r *http.Request) {
+	var scenario_id Scenario_delete
+	json.NewDecoder(r.Body).Decode(&scenario_id)
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := "DELETE FROM allnews.scenario WHERE id = $1;"
+	_, err = db.Exec(req, scenario_id.ID)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db.Close()
+	var resp Episode_response
+	resp.Status = "200, OK"
+	mess := fmt.Sprintf("Успішно видалено сценарій із ID %d", scenario_id.ID)
+	resp.Message = mess
+	json.NewEncoder(w).Encode(resp)
+	logger.Info(fmt.Sprintf("Delete scenario with ID %d", scenario_id.ID))
+
+}
+func add_scenario(w http.ResponseWriter, r *http.Request) {
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	s := Scenario_create{}
+	req := `INSERT INTO allnews.scenario (number, title, date, date_released) VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE);`
+
+	json.NewDecoder(r.Body).Decode(&s)
+	_, err = db.Exec(req, s.Number, s.Title)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db.Close()
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = "Новий сценарій створено"
+	json.NewEncoder(w).Encode(resp)
+	logger.Info("New scenario has been created")
+}
+
+func get_statistics(w http.ResponseWriter, r *http.Request) {
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	s := Statistics{}
+	req := `SELECT
+	  (SELECT COUNT(id) FROM allnews.games_news) AS games_news,
+	  (select count(dc.id) as last_month from allnews.games_news dc
+		left join (SELECT EXTRACT(EPOCH FROM NOW() - INTERVAL '30 days')::bigint AS unix_timestamp) t on 1=1
+		where time > t.unix_timestamp
+		group by t.unix_timestamp) as last_30days,
+		( select count(id) from allnews.games_news
+	 left join  ( SELECT EXTRACT(EPOCH FROM (DATE_TRUNC('MONTH', CURRENT_DATE)::DATE))::BIGINT AS unix_timestamp) t on 1=1
+	 where time>t.unix_timestamp) as this_month_from_first,
+	  (select count(id) from allnews.games_news
+	left join (SELECT EXTRACT(epoch FROM DATE_TRUNC('MONTH', CURRENT_DATE - INTERVAL '1 month')) AS first_last_month) l on 1=1
+	left join (SELECT EXTRACT(EPOCH FROM DATE_TRUNC('month', CURRENT_DATE))::int as first_curr_month) c on 1=1
+	where time>l.first_last_month and time <c.first_curr_month
+	) as lastmonth,
+	  (SELECT COUNT(DISTINCT origin) FROM allnews.games_news) AS origins,
+	  (SELECT COUNT(id) FROM allnews.episode) AS episodes,
+	  (SELECT COUNT(id) FROM allnews.episode where released=true) AS episodes_released,
+	  (SELECT COUNT(id) FROM allnews.notation where deleted=false) AS notations,
+	  (SELECT COUNT(id) FROM allnews.notation where deleted=true) AS deleted_notations;	`
+	rows, err := db.Query(req)
+	for rows.Next() {
+		m := Statistics_main{}
+		err = rows.Scan(&m.Games_news, &m.Last_30day, &m.This_month_from_first, &m.Last_month, &m.Origins, &m.Episodes, &m.Episodes_released, &m.Notations, &m.Deleted_notations)
+		if err != nil {
+			logger.Warn(err)
+		}
+		s.Main = m
+	}
+
+	req = `WITH month_intervals AS (
+		SELECT 
+		  generate_series(
+			date_trunc('month', CURRENT_DATE - interval '11 months'),
+			date_trunc('month', CURRENT_DATE),
+			interval '1 month'
+		  ) AS start_of_month
+	  )
+	  SELECT
+		TO_CHAR(start_of_month, 'Month') AS month_name,
+		EXTRACT(YEAR FROM start_of_month) AS year,
+		EXTRACT(EPOCH FROM start_of_month)::int AS start_of_month_unix_timestamp,
+		EXTRACT(EPOCH FROM (start_of_month + interval '1 month' - interval '1 day'))::int AS end_of_month_unix_timestamp,
+		(SELECT COUNT(id) FROM allnews.games_news 
+		 WHERE time >= EXTRACT(EPOCH FROM start_of_month) 
+		   AND time <= EXTRACT(EPOCH FROM (start_of_month + interval '1 month' - interval '1 day'))) AS count_news
+	  FROM month_intervals;`
+	rows, err = db.Query(req)
+
+	for rows.Next() {
+		m := Statistics_by_month_db{}
+		err = rows.Scan(&m.Month_name, &m.Year, &m.Start_of_month_unix_timestamp, &m.End_of_month_unix_timestamp, &m.Count_news)
+		if err != nil {
+			logger.Warn(err)
+		}
+		s.By_month = append(s.By_month, m)
+
+	}
+
+	req = `select count(id) as news, origin from allnews.games_news group by origin`
+	rows, err = db.Query(req)
+
+	for rows.Next() {
+		origin := ""
+		count := int64(0)
+		err = rows.Scan(&count, &origin)
+		if err != nil {
+			logger.Warn(err)
+		}
+		s.By_origin.Count = append(s.By_origin.Count, count)
+		s.By_origin.Origins = append(s.By_origin.Origins, origin)
+
+	}
+
+	db.Close()
+
+	json.NewEncoder(w).Encode(s)
+	logger.Info("Get statistics")
+
+}
 func delete_notation(w http.ResponseWriter, r *http.Request) {
 	var id Notation_del
 	json.NewDecoder(r.Body).Decode(&id)
@@ -166,6 +445,8 @@ func update_notation(w http.ResponseWriter, r *http.Request) {
 }
 func get_episode_by_id(w http.ResponseWriter, r *http.Request) {
 	var notations []Episode_notation
+	var response Episode_notation_responce
+
 	vars := mux.Vars(r)
 	str_id := vars["id"]
 	id, err := strconv.Atoi(str_id)
@@ -182,6 +463,7 @@ func get_episode_by_id(w http.ResponseWriter, r *http.Request) {
 	left join allnews.games_news news on dc.news_id = news.id
 	where dc.deleted=false and dc.episode_id=`
 	req += str_id
+	req += ` order by 2`
 	rows, err := db.Query(req)
 	for rows.Next() {
 		e := Episode_notation{}
@@ -191,8 +473,19 @@ func get_episode_by_id(w http.ResponseWriter, r *http.Request) {
 		}
 		notations = append(notations, e)
 	}
+	response.Notation = notations
+	req = fmt.Sprintf("select id,name,number,date,released from allnews.episode where id=%d", id)
+	rows, err = db.Query(req)
+	for rows.Next() {
+		e := Episode_db{}
+		err = rows.Scan(&e.ID, &e.Name, &e.Number, &e.Date, &e.Released)
+		if err != nil {
+			logger.Warn(err)
+		}
+		response.Episode = e
+	}
 	db.Close()
-	json.NewEncoder(w).Encode(notations)
+	json.NewEncoder(w).Encode(response)
 	logger.Info("Get episode with ID ", id)
 
 }
@@ -202,7 +495,7 @@ func get_all_episodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.Warn(err)
 	}
-	req := "select id,name,number,date,released from allnews.episode"
+	req := "select id,name,number,date,released from allnews.episode order by number, name asc;"
 	rows, err := db.Query(req)
 	for rows.Next() {
 		e := Episode_db{}
@@ -276,6 +569,8 @@ func add_news_from_favorit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp.Message = mess
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(resp)
 	logger.Info(fmt.Sprintf("Add news to episode with ID %d with count %d", news.Episode_ID, news_count))
 
