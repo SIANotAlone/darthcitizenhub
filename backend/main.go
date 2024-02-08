@@ -4,13 +4,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	logger "github.com/sirupsen/logrus"
 )
@@ -145,6 +148,16 @@ type Scenario_update struct {
 	Title  string `json:"title"`
 	Body   string `json:"body"`
 }
+type ChannelStatistics struct {
+	ViewCount       string `json:"viewCount"`
+	SubscriberCount string `json:"subscriberCount"`
+}
+
+type Data_from_youtube struct {
+	Items []struct {
+		Statistics ChannelStatistics `json:"statistics"`
+	} `json:"items"`
+}
 
 func init() {
 	// Log as JSON instead of the default ASCII formatter.
@@ -183,20 +196,118 @@ func main() {
 	r.HandleFunc("/episode/get/{id}", get_episode_by_id)
 	r.HandleFunc("/episode/notation/update/", update_notation).Methods(http.MethodPost)
 	r.HandleFunc("/episode/notation/delete/", delete_notation).Methods(http.MethodPost)
+	r.HandleFunc("/episode/release/", release_episode).Methods(http.MethodPost)
 
 	r.HandleFunc("/statistics", get_statistics)
+	r.HandleFunc("/statistics/youtube", get_youtube_statistics)
 
 	r.HandleFunc("/scenario/add", add_scenario).Methods(http.MethodPost)
 	r.HandleFunc("/scenario/delete", delete_scenario).Methods(http.MethodPost)
 	r.HandleFunc("/scenario/get_all", get_scenarios)
 	r.HandleFunc("/scenario/{id}", get_scenarios_by_id)
 	r.HandleFunc("/scenario/update/", update_scenario).Methods(http.MethodPost)
+	r.HandleFunc("/scenario/release/", release_scenario).Methods(http.MethodPost)
 
 	corsHandler := handlers.CORS(headers, methods, origins)(r)
 
 	http.ListenAndServe(":80", corsHandler)
 }
 
+func release_scenario(w http.ResponseWriter, r *http.Request) {
+	sc := Scenario_delete{}
+	err := json.NewDecoder(r.Body).Decode(&sc)
+	if err != nil {
+		logger.Warn("Wrong json")
+		return
+	}
+	req := "UPDATE allnews.scenario SET date_released = CURRENT_DATE, released = true WHERE id =$1;"
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+		return
+	}
+	_, err = db.Exec(req, sc.ID)
+	if err != nil {
+		logger.Warn(err)
+		return
+	}
+	db.Close()
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = "Сценарій успішно випущено"
+	json.NewEncoder(w).Encode(resp)
+	logger.Info(fmt.Sprintf("Scenario was released with ID %d", sc.ID))
+}
+func release_episode(w http.ResponseWriter, r *http.Request) {
+	ep := Delete_episode{}
+	err := json.NewDecoder(r.Body).Decode(&ep)
+	if err != nil {
+		logger.Warn("Wrong json")
+		return
+	}
+	req := "update allnews.episode set released=true where id=$1;"
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+		return
+	}
+	_, err = db.Exec(req, ep.ID)
+	if err != nil {
+		logger.Warn(err)
+		return
+	}
+	db.Close()
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = "Випуск успішно випущено"
+	json.NewEncoder(w).Encode(resp)
+	logger.Info(fmt.Sprintf("Episode was released with ID %d", ep.ID))
+
+}
+func get_youtube_statistics(w http.ResponseWriter, r *http.Request) {
+	if err := godotenv.Load(); err != nil {
+		logger.Warn("Error loading .env file:", err)
+		return
+	}
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		logger.Warn("API key not found in .env file")
+		return
+	}
+	channelID := "UCSNmY29-UaPIPhYGY3lV2Kg"
+
+	url := fmt.Sprintf("https://www.googleapis.com/youtube/v3/channels?part=statistics&id=%s&key=%s", channelID, apiKey)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		logger.Warn("Error making request:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		logger.Warn("Error reading response:", err)
+		return
+	}
+
+	var data Data_from_youtube
+	if err := json.Unmarshal(body, &data); err != nil {
+		fmt.Println("Error parsing JSON:", err)
+		return
+	}
+
+	if len(data.Items) > 0 {
+		statistics := data.Items[0].Statistics
+		logger.Info("Get youtube statistics")
+		json.NewEncoder(w).Encode(statistics)
+
+	} else {
+		logger.Warn("No statistics found for the channel")
+		json.NewEncoder(w).Encode("error")
+	}
+
+}
 func update_scenario(w http.ResponseWriter, r *http.Request) {
 	var s Scenario_update
 	err := json.NewDecoder(r.Body).Decode(&s)
