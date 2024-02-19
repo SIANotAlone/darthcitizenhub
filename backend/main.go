@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"github.com/jung-kurt/gofpdf"
 	_ "github.com/lib/pq"
 	logger "github.com/sirupsen/logrus"
 )
@@ -194,6 +196,7 @@ func main() {
 	r.HandleFunc("/episode/add_news/", add_news_from_favorit).Methods(http.MethodPost)
 	r.HandleFunc("/episode/get_all", get_all_episodes)
 	r.HandleFunc("/episode/get/{id}", get_episode_by_id)
+	r.HandleFunc("/episode/get/{id}/pdf", generate_pdf_for_episode).Methods(http.MethodGet)
 	r.HandleFunc("/episode/notation/update/", update_notation).Methods(http.MethodPost)
 	r.HandleFunc("/episode/notation/delete/", delete_notation).Methods(http.MethodPost)
 	r.HandleFunc("/episode/release/", release_episode).Methods(http.MethodPost)
@@ -411,8 +414,8 @@ func add_scenario(w http.ResponseWriter, r *http.Request) {
 		logger.Warn(err)
 	}
 	s := Scenario_create{}
-	req := `INSERT INTO allnews.scenario (number, title, date, date_released) VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE);`
-
+	req := `INSERT INTO allnews.scenario (number, title, date, date_released, body) 
+	VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE, '');`
 	json.NewDecoder(r.Body).Decode(&s)
 	_, err = db.Exec(req, s.Number, s.Title)
 	if err != nil {
@@ -436,7 +439,8 @@ func get_statistics(w http.ResponseWriter, r *http.Request) {
 		logger.Warn(err)
 	}
 	s := Statistics{}
-	req := `SELECT
+	req := `
+	SELECT
 	  (SELECT COUNT(id) FROM allnews.games_news) AS games_news,
 	  (select count(dc.id) as last_month from allnews.games_news dc
 		left join (SELECT EXTRACT(EPOCH FROM NOW() - INTERVAL '30 days')::bigint AS unix_timestamp) t on 1=1
@@ -453,8 +457,10 @@ func get_statistics(w http.ResponseWriter, r *http.Request) {
 	  (SELECT COUNT(DISTINCT origin) FROM allnews.games_news) AS origins,
 	  (SELECT COUNT(id) FROM allnews.episode) AS episodes,
 	  (SELECT COUNT(id) FROM allnews.episode where released=true) AS episodes_released,
-	  (SELECT COUNT(id) FROM allnews.notation where deleted=false) AS notations,
-	  (SELECT COUNT(id) FROM allnews.notation where deleted=true) AS deleted_notations;	`
+	  (SELECT COUNT(n.id) FROM allnews.notation n
+			   left join allnews.episode e on e.id = n.episode_id
+	   where n.deleted=false and e.released=true) AS notation,
+	  (SELECT COUNT(id) FROM allnews.notation where deleted=true) AS deleted_notation;	`
 	rows, err := db.Query(req)
 	for rows.Next() {
 		m := Statistics_main{}
@@ -600,6 +606,84 @@ func get_episode_by_id(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Get episode with ID ", id)
 
 }
+func generate_pdf_for_episode(w http.ResponseWriter, r *http.Request) {
+	var notations []Episode_notation
+	var response Episode_notation_responce
+
+	vars := mux.Vars(r)
+	str_id := vars["id"]
+	id, err := strconv.Atoi(str_id)
+
+	if err != nil {
+		panic(err)
+	}
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := `select dc.id, news.title, news.url, news.short, news.origin, news.preview, dc.notation
+	from allnews.notation dc
+	left join allnews.games_news news on dc.news_id = news.id
+	where dc.deleted=false and dc.episode_id=`
+	req += str_id
+	req += ` order by 2`
+	rows, err := db.Query(req)
+	for rows.Next() {
+		e := Episode_notation{}
+		err = rows.Scan(&e.ID, &e.Title, &e.Url, &e.Short, &e.Origin, &e.Preview, &e.Notation)
+		if err != nil {
+			logger.Warn(err)
+		}
+		notations = append(notations, e)
+	}
+	response.Notation = notations
+	req = fmt.Sprintf("select id,name,number,date,released from allnews.episode where id=%d", id)
+	rows, err = db.Query(req)
+	for rows.Next() {
+		e := Episode_db{}
+		err = rows.Scan(&e.ID, &e.Name, &e.Number, &e.Date, &e.Released)
+		if err != nil {
+			logger.Warn(err)
+		}
+		response.Episode = e
+	}
+	db.Close()
+	pdf := gen_pdf_episode(response)
+	header := fmt.Sprintf("attachment; filename=%s.pdf", response.Episode.Name)
+	w.Header().Set("Content-Type", "application/pdf; charset=utf-8")
+	w.Header().Set("Content-Disposition", header)
+	if _, err := w.Write(pdf); err != nil {
+		http.Error(w, "Помилка при відправленні PDF", http.StatusInternalServerError)
+		logger.Warn(err)
+		return
+	}
+	logger.Info(fmt.Sprintf("Generate PDF for episode with ID %d", id))
+}
+
+func gen_pdf_episode(episode Episode_notation_responce) []byte {
+	var buf bytes.Buffer
+	pwd, _ := os.Getwd()
+	pdf := gofpdf.New("P", "mm", "A4", pwd+"/font")
+	pdf.AddUTF8Font("Roboto", "", "Roboto-Regular.ttf")
+
+	pdf.AddPage()
+	pdf.SetFont("Roboto", "", 16)
+	pdf.MultiCell(190, 10, episode.Episode.Name, "", "C", false)
+	for _, item := range episode.Notation {
+		pdf.SetFont("Roboto", "", 12)
+		pdf.MultiCell(190, 5, item.Title, "", "C", false)
+		pdf.SetFont("Roboto", "", 8)
+		pdf.MultiCell(190, 5, item.Notation, "", "J", false)
+		pdf.MultiCell(190, 5, "\n", "0", "0", false)
+	}
+	err := pdf.Output(&buf)
+	if err != nil {
+		return nil
+	}
+	return buf.Bytes()
+
+}
+
 func get_all_episodes(w http.ResponseWriter, r *http.Request) {
 	var episodes []Episode_db
 	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
