@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -110,9 +111,10 @@ type Statistics_by_month_db struct {
 	Count_news                    int64  `json:"count_news"`
 }
 type Statistics struct {
-	Main      Statistics_main          `json:"main"`
-	By_month  []Statistics_by_month_db `json:"by_month"`
-	By_origin Statistics_by_origin     `json:"by_origin"`
+	Main                 Statistics_main          `json:"main"`
+	By_month             []Statistics_by_month_db `json:"by_month"`
+	By_origin            Statistics_by_origin     `json:"by_origin"`
+	By_origin_this_month Statistics_by_origin     `json:"by_origin_this_month"`
 }
 type Statistics_by_origin struct {
 	Origins []string `json:"origins"`
@@ -500,7 +502,7 @@ func get_statistics(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	req = `select count(id) as news, origin from allnews.games_news group by origin`
+	req = `select count(id) as news, origin from allnews.games_news group by origin order by 1 desc`
 	rows, err = db.Query(req)
 
 	for rows.Next() {
@@ -515,6 +517,24 @@ func get_statistics(w http.ResponseWriter, r *http.Request) {
 
 	}
 
+	req = `select origin, count(id) from allnews.games_news
+	where time>
+	(SELECT EXTRACT(epoch FROM date_trunc('month', CURRENT_DATE))::int AS unix_timestamp_of_first_day_of_this_month)
+	group by origin
+	order by 2 desc`
+
+	rows, err = db.Query(req)
+
+	for rows.Next() {
+		origin := ""
+		count := int64(0)
+		err = rows.Scan(&origin, &count)
+		if err != nil {
+			logger.Warn(err)
+		}
+		s.By_origin_this_month.Count = append(s.By_origin_this_month.Count, count)
+		s.By_origin_this_month.Origins = append(s.By_origin_this_month.Origins, origin)
+	}
 	db.Close()
 
 	json.NewEncoder(w).Encode(s)
@@ -670,6 +690,7 @@ func gen_pdf_episode(episode Episode_notation_responce) []byte {
 	pdf.SetFont("Roboto", "", 16)
 	pdf.MultiCell(190, 10, episode.Episode.Name, "", "C", false)
 	for _, item := range episode.Notation {
+		item.Notation = delete_html_tags(item.Notation)
 		pdf.SetFont("Roboto", "", 12)
 		pdf.MultiCell(190, 5, item.Title, "", "C", false)
 		pdf.SetFont("Roboto", "", 8)
@@ -682,6 +703,10 @@ func gen_pdf_episode(episode Episode_notation_responce) []byte {
 	}
 	return buf.Bytes()
 
+}
+func delete_html_tags(str string) string {
+	re := regexp.MustCompile(`<[^>]*>`)
+	return re.ReplaceAllString(str, "")
 }
 
 func get_all_episodes(w http.ResponseWriter, r *http.Request) {
