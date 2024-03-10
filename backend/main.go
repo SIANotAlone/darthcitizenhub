@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/handlers"
@@ -65,11 +68,14 @@ type Add_news struct {
 	Episode_ID int `json:"episode_id"`
 }
 type Episode_db struct {
-	ID       int       `json:"id"`
-	Name     string    `json:"name"`
-	Number   int       `json:"number"`
-	Date     time.Time `json:"date"`
-	Released bool      `json:"released"`
+	ID          int       `json:"id"`
+	Name        string    `json:"name"`
+	Number      int       `json:"number"`
+	Date        time.Time `json:"date"`
+	Released    bool      `json:"released"`
+	Intro       *string   `json:"intro"`
+	Ending      *string   `json:"ending"`
+	Description *string   `json:"description"`
 }
 
 type Episode_notation struct {
@@ -162,6 +168,15 @@ type Data_from_youtube struct {
 		Statistics ChannelStatistics `json:"statistics"`
 	} `json:"items"`
 }
+type Timeline struct {
+	Number   int64
+	Title    string
+	Timecode string
+}
+type Episode_meta_information struct {
+	Id      int    `json:"id"`
+	Content string `json:"content"`
+}
 
 func init() {
 	// Log as JSON instead of the default ASCII formatter.
@@ -199,6 +214,10 @@ func main() {
 	r.HandleFunc("/episode/get_all", get_all_episodes)
 	r.HandleFunc("/episode/get/{id}", get_episode_by_id)
 	r.HandleFunc("/episode/get/{id}/pdf", generate_pdf_for_episode).Methods(http.MethodGet)
+	r.HandleFunc("/episode/contents/", contents).Methods(http.MethodPost)
+	r.HandleFunc("/episode/update_contents/", update_contents).Methods(http.MethodPost)
+	r.HandleFunc("/episode/update_intro/", update_intro).Methods(http.MethodPost)
+	r.HandleFunc("/episode/update_ending/", update_ending).Methods(http.MethodPost)
 	r.HandleFunc("/episode/notation/update/", update_notation).Methods(http.MethodPost)
 	r.HandleFunc("/episode/notation/delete/", delete_notation).Methods(http.MethodPost)
 	r.HandleFunc("/episode/release/", release_episode).Methods(http.MethodPost)
@@ -216,6 +235,160 @@ func main() {
 	corsHandler := handlers.CORS(headers, methods, origins)(r)
 
 	http.ListenAndServe(":80", corsHandler)
+}
+func update_contents(w http.ResponseWriter, r *http.Request) {
+	var meta Episode_meta_information
+	err := json.NewDecoder(r.Body).Decode(&meta)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := "update allnews.episode set description = $1 where id=$2"
+
+	_, err = db.Exec(req, meta.Content, meta.Id)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db.Close()
+	logger.Info(fmt.Sprintf("Contents for episode %d updated", meta.Id))
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = fmt.Sprintf("Опис для епізоду %d успішно оновлено", meta.Id)
+	json.NewEncoder(w).Encode(resp)
+
+}
+func update_intro(w http.ResponseWriter, r *http.Request) {
+	var meta Episode_meta_information
+	json.NewDecoder(r.Body).Decode(&meta)
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := "update allnews.episode set intro = $1 where id=$2"
+
+	_, err = db.Exec(req, meta.Content, meta.Id)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db.Close()
+	logger.Info(fmt.Sprintf("Intro for episode %d updated", meta.Id))
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = fmt.Sprintf("Вступ для епізоду %d успішно оновлено", meta.Id)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func update_ending(w http.ResponseWriter, r *http.Request) {
+	var meta Episode_meta_information
+	json.NewDecoder(r.Body).Decode(&meta)
+	db, err := sql.Open("postgres", "postgres://postgres:12345678@localhost/news?sslmode=disable")
+	if err != nil {
+		logger.Warn(err)
+	}
+	req := "update allnews.episode set ending = $1 where id=$2"
+
+	_, err = db.Exec(req, meta.Content, meta.Id)
+	if err != nil {
+		logger.Warn(err)
+	}
+	db.Close()
+	logger.Info(fmt.Sprintf("Ending for episode %d updated", meta.Id))
+	var resp Episode_response
+	resp.Status = "200, OK"
+	resp.Message = fmt.Sprintf("Закінчення для епізоду %d успішно оновлено", meta.Id)
+	json.NewEncoder(w).Encode(resp)
+}
+func contents(w http.ResponseWriter, r *http.Request) {
+	// Парсимо multipart form, який містить файл
+	err := r.ParseMultipartForm(10 << 20) // 10MB - максимальний розмір файлу
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	timeline := get_contents_from_edl(file)
+	contents := []string{}
+
+	// Додавання заголовків
+	contents = append(contents, "Сюди вставити опис для відео")
+	contents = append(contents, "---------------------------------------------------------------------------------------------------------------")
+	contents = append(contents, "Мій телеграм - https://t.me/darthcitizen")
+	contents = append(contents, "Мій інстаграм - https://www.instagram.com/sianotalone")
+	contents = append(contents, "---------------------------------------------------------------------------------------------------------------")
+
+	// Додавання елементів таймлайну
+	for _, item := range timeline {
+		contents = append(contents, item.Timecode+" — "+item.Title)
+	}
+	resp := map[string]interface{}{
+		"contents": contents,
+	}
+	logger.Info("Get contents from EDL file")
+	// Відправляємо результат``
+	w.Header().Set("Content-Type", "text/plain")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func get_contents_from_edl(file io.Reader) []Timeline {
+	var timeline []Timeline
+	scanner := bufio.NewScanner(file)
+	var i = 0
+	var item = Timeline{}
+
+	for scanner.Scan() {
+		if i == 0 {
+			if strings.Contains(scanner.Text(), "TITLE") {
+				// fmt.Println("#" + strconv.Itoa(i) + " " + scanner.Text())
+				i += 1
+				continue
+			} else {
+				fmt.Println("This is not .edl file")
+				break
+			}
+		}
+		if i >= 3 {
+			timecodeline_splitted := strings.Split(scanner.Text(), " ")
+			if len(timecodeline_splitted) > 1 {
+				num, err := strconv.ParseInt(timecodeline_splitted[0], 10, 64)
+				if err != nil {
+
+				}
+
+				if num != 0 {
+					item.Number = num
+					time_splited := strings.Split(scanner.Text(), ":")
+					item.Timecode = time_splited[1] + ":" + time_splited[2]
+				}
+
+			}
+			titleline_splitted := strings.Split(scanner.Text(), "|")
+			if len(titleline_splitted) > 2 {
+				item.Title = titleline_splitted[2][2:]
+
+				timeline = append(timeline, item)
+				item = Timeline{}
+			}
+
+		}
+		i += 1
+
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Println("Помилка при скануванні файлу:", err)
+		return nil
+	}
+	return timeline
 }
 
 func release_scenario(w http.ResponseWriter, r *http.Request) {
@@ -611,11 +784,11 @@ func get_episode_by_id(w http.ResponseWriter, r *http.Request) {
 		notations = append(notations, e)
 	}
 	response.Notation = notations
-	req = fmt.Sprintf("select id,name,number,date,released from allnews.episode where id=%d", id)
+	req = fmt.Sprintf("select id,name,number,date,released, intro, ending, description from allnews.episode where id=%d", id)
 	rows, err = db.Query(req)
 	for rows.Next() {
 		e := Episode_db{}
-		err = rows.Scan(&e.ID, &e.Name, &e.Number, &e.Date, &e.Released)
+		err = rows.Scan(&e.ID, &e.Name, &e.Number, &e.Date, &e.Released, &e.Intro, &e.Ending, &e.Description)
 		if err != nil {
 			logger.Warn(err)
 		}
@@ -740,7 +913,7 @@ func add_news_from_favorit(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 	}
 	req :=
-		`select * from allnews.games_news
+		`select id, title, short, origin, url, preview, time, favorit from allnews.games_news
 	where favorit = true
 	`
 	rows, err := db.Query(req)
@@ -857,7 +1030,7 @@ func get_gaming_news_byorigin_page_number(w http.ResponseWriter, r *http.Request
 	}
 
 	offset := (id * 20) - 20
-	var query string = "SELECT * FROM allnews.games_news WHERE origin = '" + origin + "' ORDER BY id DESC LIMIT 20  OFFSET " + strconv.FormatInt(int64(offset), 10)
+	var query string = "select id, title, short, origin, url, preview, time, favorit from allnews.games_news WHERE origin = '" + origin + "' ORDER BY id DESC LIMIT 20  OFFSET " + strconv.FormatInt(int64(offset), 10)
 	rows, err := db.Query(query)
 	for rows.Next() {
 		f := Games_News{}
@@ -901,7 +1074,7 @@ func get_favorite_games(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	query := "SELECT * FROM allnews.games_news WHERE favorit = True ORDER BY id DESC"
+	query := "select id, title, short, origin, url, preview, time, favorit from allnews.games_news WHERE favorit = True ORDER BY id DESC"
 	// fmt.Println(query)
 	rows, err := db.Query(query)
 	for rows.Next() {
@@ -929,7 +1102,7 @@ func get_gaming_news_by_origin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	query := "SELECT * FROM allnews.games_news WHERE origin = '" + origin + "' ORDER BY id DESC LIMIT 20"
+	query := "select id, title, short, origin, url, preview, time, favorit from allnews.games_news WHERE origin = '" + origin + "' ORDER BY id DESC LIMIT 20"
 	// fmt.Println(query)
 	rows, err := db.Query(query)
 	for rows.Next() {
@@ -1050,7 +1223,7 @@ func get_games_news() []Games_News {
 	if err != nil {
 		log.Fatal(err)
 	}
-	rows, err := db.Query("SELECT * FROM allnews.games_news ORDER BY id DESC LIMIT 20")
+	rows, err := db.Query("select id, title, short, origin, url, preview, time, favorit from allnews.games_news ORDER BY id DESC LIMIT 20")
 	for rows.Next() {
 		f := Games_News{}
 		err = rows.Scan(&f.Id, &f.Title, &f.Short, &f.Origin, &f.Url, &f.Preview, &f.Time, &f.Favorit)
@@ -1071,7 +1244,7 @@ func get_games_news_by_page(id int) []Games_News {
 	}
 
 	offset := (id * 20) - 20
-	var query string = "SELECT * FROM allnews.games_news ORDER BY id DESC LIMIT 20  OFFSET " + strconv.FormatInt(int64(offset), 10)
+	var query string = "select id, title, short, origin, url, preview, time, favorit from allnews.games_news ORDER BY id DESC LIMIT 20  OFFSET " + strconv.FormatInt(int64(offset), 10)
 	rows, err := db.Query(query)
 	for rows.Next() {
 		f := Games_News{}
