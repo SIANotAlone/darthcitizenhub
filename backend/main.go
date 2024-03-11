@@ -117,10 +117,15 @@ type Statistics_by_month_db struct {
 	Count_news                    int64  `json:"count_news"`
 }
 type Statistics struct {
-	Main                 Statistics_main          `json:"main"`
-	By_month             []Statistics_by_month_db `json:"by_month"`
-	By_origin            Statistics_by_origin     `json:"by_origin"`
-	By_origin_this_month Statistics_by_origin     `json:"by_origin_this_month"`
+	Main                  Statistics_main                     `json:"main"`
+	By_month              []Statistics_by_month_db            `json:"by_month"`
+	By_origin             Statistics_by_origin                `json:"by_origin"`
+	By_origin_this_month  Statistics_by_origin                `json:"by_origin_this_month"`
+	By_origin_in_released News_by_origin_in_released_episodes `json:"by_origin_in_released"`
+}
+type News_by_origin_in_released_episodes struct {
+	Origin []string `json:"origin"`
+	Count  []int64  `json:"count"`
 }
 type Statistics_by_origin struct {
 	Origins []string `json:"origins"`
@@ -708,6 +713,30 @@ func get_statistics(w http.ResponseWriter, r *http.Request) {
 		s.By_origin_this_month.Count = append(s.By_origin_this_month.Count, count)
 		s.By_origin_this_month.Origins = append(s.By_origin_this_month.Origins, origin)
 	}
+
+	req = `select max(c.origin) as origin, count(*) from allnews.notation dc
+	left join allnews.games_news c on c.id = dc.news_id
+	left join allnews.episode c1 on c1.id = dc.episode_id
+	where dc.deleted=false and c1.released = true
+	group by c.origin
+	order by count DESC`
+	n := News_by_origin_in_released_episodes{}
+	rows, err = db.Query(req)
+	for rows.Next() {
+
+		var o string
+		var c int64
+		err = rows.Scan(&o, &c)
+		if err != nil {
+			logger.Warn(err)
+		}
+		n.Origin = append(n.Origin, o)
+		n.Count = append(n.Count, c)
+
+	}
+
+	s.By_origin_in_released = n
+
 	db.Close()
 
 	json.NewEncoder(w).Encode(s)
@@ -830,11 +859,11 @@ func generate_pdf_for_episode(w http.ResponseWriter, r *http.Request) {
 		notations = append(notations, e)
 	}
 	response.Notation = notations
-	req = fmt.Sprintf("select id,name,number,date,released from allnews.episode where id=%d", id)
+	req = fmt.Sprintf("select id,name,number,date,released, intro, ending, description from allnews.episode where id=%d", id)
 	rows, err = db.Query(req)
 	for rows.Next() {
 		e := Episode_db{}
-		err = rows.Scan(&e.ID, &e.Name, &e.Number, &e.Date, &e.Released)
+		err = rows.Scan(&e.ID, &e.Name, &e.Number, &e.Date, &e.Released, &e.Intro, &e.Ending, &e.Description)
 		if err != nil {
 			logger.Warn(err)
 		}
@@ -862,6 +891,14 @@ func gen_pdf_episode(episode Episode_notation_responce) []byte {
 	pdf.AddPage()
 	pdf.SetFont("Roboto", "", 16)
 	pdf.MultiCell(190, 10, episode.Episode.Name, "", "C", false)
+	//формуємо інтро
+	intro := delete_html_tags(*episode.Episode.Intro)
+	pdf.SetFont("Roboto", "", 12)
+	pdf.MultiCell(190, 5, "Вступ", "", "C", false)
+	pdf.SetFont("Roboto", "", 8)
+	pdf.MultiCell(190, 5, intro, "", "J", false)
+	pdf.MultiCell(190, 5, "\n", "0", "0", false)
+	//формуємо новини
 	for _, item := range episode.Notation {
 		item.Notation = delete_html_tags(item.Notation)
 		pdf.SetFont("Roboto", "", 12)
@@ -870,6 +907,14 @@ func gen_pdf_episode(episode Episode_notation_responce) []byte {
 		pdf.MultiCell(190, 5, item.Notation, "", "J", false)
 		pdf.MultiCell(190, 5, "\n", "0", "0", false)
 	}
+	//формуємо закінчення
+	ending := delete_html_tags(*episode.Episode.Ending)
+	pdf.SetFont("Roboto", "", 12)
+	pdf.MultiCell(190, 5, "Закінчення", "", "C", false)
+	pdf.SetFont("Roboto", "", 8)
+	pdf.MultiCell(190, 5, ending, "", "J", false)
+	pdf.MultiCell(190, 5, "\n", "0", "0", false)
+
 	err := pdf.Output(&buf)
 	if err != nil {
 		return nil
