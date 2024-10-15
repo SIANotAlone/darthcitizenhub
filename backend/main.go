@@ -867,8 +867,10 @@ func generate_pdf_for_episode(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			logger.Warn(err)
 		}
+
 		response.Episode = e
 	}
+
 	db.Close()
 	pdf := gen_pdf_episode(response)
 	header := fmt.Sprintf("attachment; filename=%s.pdf", response.Episode.Name)
@@ -892,12 +894,15 @@ func gen_pdf_episode(episode Episode_notation_responce) []byte {
 	pdf.SetFont("Roboto", "", 16)
 	pdf.MultiCell(190, 10, episode.Episode.Name, "", "C", false)
 	//формуємо інтро
-	intro := delete_html_tags(*episode.Episode.Intro)
-	pdf.SetFont("Roboto", "", 12)
-	pdf.MultiCell(190, 5, "Вступ", "", "C", false)
-	pdf.SetFont("Roboto", "", 8)
-	pdf.MultiCell(190, 5, intro, "", "J", false)
-	pdf.MultiCell(190, 5, "\n", "0", "0", false)
+	if episode.Episode.Intro != nil {
+		intro := delete_html_tags(*episode.Episode.Intro)
+		pdf.SetFont("Roboto", "", 12)
+		pdf.MultiCell(190, 5, "Вступ", "", "C", false)
+		pdf.SetFont("Roboto", "", 8)
+		pdf.MultiCell(190, 5, intro, "", "J", false)
+		pdf.MultiCell(190, 5, "\n", "0", "0", false)
+	}
+
 	//формуємо новини
 	for _, item := range episode.Notation {
 		item.Notation = delete_html_tags(item.Notation)
@@ -908,12 +913,14 @@ func gen_pdf_episode(episode Episode_notation_responce) []byte {
 		pdf.MultiCell(190, 5, "\n", "0", "0", false)
 	}
 	//формуємо закінчення
-	ending := delete_html_tags(*episode.Episode.Ending)
-	pdf.SetFont("Roboto", "", 12)
-	pdf.MultiCell(190, 5, "Закінчення", "", "C", false)
-	pdf.SetFont("Roboto", "", 8)
-	pdf.MultiCell(190, 5, ending, "", "J", false)
-	pdf.MultiCell(190, 5, "\n", "0", "0", false)
+	if episode.Episode.Intro != nil {
+		ending := delete_html_tags(*episode.Episode.Ending)
+		pdf.SetFont("Roboto", "", 12)
+		pdf.MultiCell(190, 5, "Закінчення", "", "C", false)
+		pdf.SetFont("Roboto", "", 8)
+		pdf.MultiCell(190, 5, ending, "", "J", false)
+		pdf.MultiCell(190, 5, "\n", "0", "0", false)
+	}
 
 	err := pdf.Output(&buf)
 	if err != nil {
